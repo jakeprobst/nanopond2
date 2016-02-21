@@ -597,7 +597,7 @@ static void doDump(const uint64_t clock)
 					* a LOOP/REP pair that's always false. In any case, this
 					* would always result in our *underestimating* the size of
 					* the genome and would never result in an overestimation. */
-					fprintf(d,"%" PRIu64,inst);
+					fprintf(d,"%" PRIx64,inst);
 					if (inst == 0xf) { /* STOP */
 						if (++stopCount >= 4){
 							break;
