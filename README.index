@@ -37,10 +37,22 @@ Mapping
   cell struct.  This will make parallelization 
   easier.
 
-  Added outputBuf to cell Struct  
+  Added outputBuf to cell struct  
   74.14 real        73.88 user         0.93 sys
 
 commit 6ee86f0848c601dd39e5aad255c24271d733015f 
 commit 2ee161e3a3a394a3fc3b8140f56449d24bdb0015
+
+  Added reg to cell struct 
+  73.97 real        73.64 user         0.98 sys
+
+commit 8b1bccb6f9ce80bba22a6c1a4eaf1fb18439237d
+
+Moved all cell-specific variables to cell struct
+
+  95.64 real        94.64 user         1.64 sys
+
+  Big performance hit
+
 
 
