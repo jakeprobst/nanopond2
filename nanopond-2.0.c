@@ -438,6 +438,9 @@ struct Cell
 	/* Memory space for cell genome (genome is stored as four
 	* bit instructions packed into machine size words) */
 	uint64_t genome[POND_DEPTH_SYSWORDS];
+
+	/* Buffer used for execution output of candidate offspring */
+	uint64_t outputBuf[POND_DEPTH_SYSWORDS];
 };
 
 /* The pond is a 2D array of cells */
@@ -777,8 +780,6 @@ int main(int argc,char **argv)
 {
 	uint64_t i,x,y;
   
-	/* Buffer used for execution output of candidate offspring */
-	uint64_t outputBuf[POND_DEPTH_SYSWORDS];
   
 	/* Seed and init the random number generator */
 	init_genrand();
@@ -957,8 +958,9 @@ int main(int argc,char **argv)
 		cell = &pond[x][y];
 
 		/* Reset the state of the VM prior to execution */
+		// BLR This should really be memset.
 		for(i=0;i<POND_DEPTH_SYSWORDS;++i){
-			outputBuf[i] = ~((uint64_t)0); /* ~0 == 0xfffff... */
+			cell->outputBuf[i] = ~((uint64_t)0); /* ~0 == 0xfffff... */
 		}
 		ptr_wordPtr = 0;
 		ptr_shiftPtr = 0;
@@ -1062,11 +1064,11 @@ int main(int argc,char **argv)
 						currentWord = cell->genome[wordPtr]; /* Must refresh in case this changed! */
 						break;
 					case 0x7: /* READB: Read into the register from buffer */
-						reg = (outputBuf[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
+						reg = (cell->outputBuf[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
 						break;
 					case 0x8: /* WRITEB: Write out from the register to buffer */
-						outputBuf[ptr_wordPtr] &= ~(((uint64_t)0xf) << ptr_shiftPtr);
-						outputBuf[ptr_wordPtr] |= reg << ptr_shiftPtr;
+						cell->outputBuf[ptr_wordPtr] &= ~(((uint64_t)0xf) << ptr_shiftPtr);
+						cell->outputBuf[ptr_wordPtr] |= reg << ptr_shiftPtr;
 						break;
 					case 0x9: /* LOOP: Jump forward to matching REP if register is zero */
 						if (reg) {
@@ -1171,7 +1173,7 @@ int main(int argc,char **argv)
 		* to copy to a cell with no energy, since anything copied there
 		* would never be executed and then would be replaced with random
 		* junk eventually. See the seeding code in the main loop above. */
-		if ((outputBuf[0] & 0xff) != 0xff) {
+		if ((cell->outputBuf[0] & 0xff) != 0xff) {
 			tmcell = getNeighbor(x,y,facing);
 			if ((tmcell->energy)&&accessAllowed(tmcell,reg,0)) {
 				/* Log it if we're replacing a viable cell */
@@ -1184,7 +1186,7 @@ int main(int argc,char **argv)
 				tmcell->lineage = cell->lineage; /* Lineage is copied in offspring */
 				tmcell->generation = cell->generation + 1;
 				for(i=0;i<POND_DEPTH_SYSWORDS;++i){
-					tmcell->genome[i] = outputBuf[i];
+					tmcell->genome[i] = cell->outputBuf[i];
 				}
 			}
 		}
