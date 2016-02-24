@@ -18,3 +18,27 @@ Renamed binary npx-baseline to allow reproducing
 	(0major+1447minor)pagefaults 
 	0swaps
 
+  Cuyahoga numbers:
+  72.95 real        72.53 user         0.96 sys
+
+commit db10bc9ec4d50193490df2c8383a0add55f7d592
+
+Testing
+
+  Added "test" to makefile; compares baseline 
+  output with new output.
+
+commit 6ee86f0848c601dd39e5aad255c24271d733015f
+
+Mapping
+
+  First order of business:  let's move all of the 
+  moving parts of the virtual machine into the 
+  cell struct.  This will make parallelization 
+  easier.
+
+  Added outputBuf to cell Struct  
+  74.14 real        73.88 user         0.93 sys
+
+  
+
