@@ -2,3 +2,19 @@ commit b5e46f12722c690b0f842c16d879a8a6ab733524
 
 Added README.index (this file)
 
+commit 38f406518a9e9ab5a1053a82c79b4e070609f713
+
+Baseline
+Enabled dump on program completion.  File renamed
+  100000000.dump.csv.baseline and added to repo
+  to allow validation of optimizations.
+Renamed binary npx-baseline to allow reproducing
+  runs on other machines.
+  /usr/bin/time reports
+	39.51user 0.01system 0:39.93elapsed 
+	98%CPU 
+	(0avgtext+0avgdata 94396maxresident)k
+	0inputs+120outputs 
+	(0major+1447minor)pagefaults 
+	0swaps
+

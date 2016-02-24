@@ -198,7 +198,7 @@
  * semi-human-readable if you look at the big switch() statement
  * in the main loop to see what instruction is signified by each
  * four-bit value. */
-//#define DUMP_FREQUENCY (10000 * TICK)
+#define DUMP_FREQUENCY (1000000ULL * TICK)
 
 /* Mutation rate -- range is from 0 (none) to 0xffffffff (all mutations!) */
 /* To get it from a float probability from 0.0 to 1.0, multiply it by
