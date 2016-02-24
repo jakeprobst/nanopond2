@@ -441,6 +441,9 @@ struct Cell
 
 	/* Buffer used for execution output of candidate offspring */
 	uint64_t outputBuf[POND_DEPTH_SYSWORDS];
+
+	/* The main "register" */
+	uint64_t reg;
 };
 
 /* The pond is a 2D array of cells */
@@ -839,9 +842,6 @@ int main(int argc,char **argv)
 	uint64_t ptr_wordPtr;
 	uint64_t ptr_shiftPtr;
   
-	/* The main "register" */
-	uint64_t reg;
-  
 	/* Which way is the cell facing? */
 	uint64_t facing;
   
@@ -964,7 +964,7 @@ int main(int argc,char **argv)
 		}
 		ptr_wordPtr = 0;
 		ptr_shiftPtr = 0;
-		reg = 0;
+		cell->reg = 0;
 		loopStackPtr = 0;
 		wordPtr = EXEC_START_WORD;
 		shiftPtr = EXEC_START_BIT;
@@ -999,7 +999,7 @@ int main(int argc,char **argv)
 				if (tmp & 0x80){ /* Check for the 8th bit to get random boolean */
 					inst = tmp & 0xf; /* Only the first four bits are used here */
 				} else {
-					reg = tmp & 0xf;
+					cell->reg = tmp & 0xf;
 				}
 			}
       
@@ -1024,7 +1024,7 @@ int main(int argc,char **argv)
         
 				switch(inst) {
 					case 0x0: /* ZERO: Zero VM state registers */
-						reg = 0;
+						cell->reg = 0;
 						ptr_wordPtr = 0;
 						ptr_shiftPtr = 0;
 						facing = 0;
@@ -1050,28 +1050,28 @@ int main(int argc,char **argv)
 						}
 						break;
 					case 0x3: /* INC: Increment the register */
-						reg = (reg + 1) & 0xf;
+						cell->reg = (cell->reg + 1) & 0xf;
 						break;
 					case 0x4: /* DEC: Decrement the register */
-						reg = (reg - 1) & 0xf;
+						cell->reg = (cell->reg - 1) & 0xf;
 						break;
 					case 0x5: /* READG: Read into the register from genome */
-						reg = (cell->genome[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
+						cell->reg = (cell->genome[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
 						break;
 					case 0x6: /* WRITEG: Write out from the register to genome */
 						cell->genome[ptr_wordPtr] &= ~(((uint64_t)0xf) << ptr_shiftPtr);
-						cell->genome[ptr_wordPtr] |= reg << ptr_shiftPtr;
+						cell->genome[ptr_wordPtr] |= cell->reg << ptr_shiftPtr;
 						currentWord = cell->genome[wordPtr]; /* Must refresh in case this changed! */
 						break;
 					case 0x7: /* READB: Read into the register from buffer */
-						reg = (cell->outputBuf[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
+						cell->reg = (cell->outputBuf[ptr_wordPtr] >> ptr_shiftPtr) & 0xf;
 						break;
 					case 0x8: /* WRITEB: Write out from the register to buffer */
 						cell->outputBuf[ptr_wordPtr] &= ~(((uint64_t)0xf) << ptr_shiftPtr);
-						cell->outputBuf[ptr_wordPtr] |= reg << ptr_shiftPtr;
+						cell->outputBuf[ptr_wordPtr] |= cell->reg << ptr_shiftPtr;
 						break;
 					case 0x9: /* LOOP: Jump forward to matching REP if register is zero */
-						if (reg) {
+						if (cell->reg) {
 							if (loopStackPtr >= POND_DEPTH){
 								stop = 1; /* Stack overflow ends execution */
 							} else {
@@ -1086,7 +1086,7 @@ int main(int argc,char **argv)
 					case 0xa: /* REP: Jump back to matching LOOP if register is nonzero */
 						if (loopStackPtr) {
 							--loopStackPtr;
-							if (reg) {
+							if (cell->reg) {
 								wordPtr = loopStack_wordPtr[loopStackPtr];
 								shiftPtr = loopStack_shiftPtr[loopStackPtr];
 								currentWord = cell->genome[wordPtr];
@@ -1096,7 +1096,7 @@ int main(int argc,char **argv)
 						}
 						break;
 					case 0xb: /* TURN: Turn in the direction specified by register */
-						facing = reg & 3;
+						facing = cell->reg & 3;
 						break;
 					case 0xc: /* XCHG: Skip next instruction and exchange value of register with it */
 						if ((shiftPtr += 4) >= SYSWORD_BITS) {
@@ -1107,15 +1107,15 @@ int main(int argc,char **argv)
 								shiftPtr = 0;
 							}
 						}
-						tmp = reg;
-						reg = (cell->genome[wordPtr] >> shiftPtr) & 0xf;
+						tmp = cell->reg;
+						cell->reg = (cell->genome[wordPtr] >> shiftPtr) & 0xf;
 						cell->genome[wordPtr] &= ~(((uint64_t)0xf) << shiftPtr);
 						cell->genome[wordPtr] |= tmp << shiftPtr;
 						currentWord = cell->genome[wordPtr];
 						break;
 					case 0xd: /* KILL: Blow away neighboring cell if allowed with penalty on failure */
 						tmcell = getNeighbor(x,y,facing);
-						if (accessAllowed(tmcell,reg,0)) {
+						if (accessAllowed(tmcell,cell->reg,0)) {
 							if (tmcell->generation > 2){
 								++statCounters.viableCellsKilled;
 							}
@@ -1139,7 +1139,7 @@ int main(int argc,char **argv)
 						break;
 					case 0xe: /* SHARE: Equalize energy between self and neighbor if allowed */
 						tmcell = getNeighbor(x,y,facing);
-						if (accessAllowed(tmcell,reg,1)) {
+						if (accessAllowed(tmcell,cell->reg,1)) {
 							if (tmcell->generation > 2) {
 								++statCounters.viableCellShares;
 							}
@@ -1175,7 +1175,7 @@ int main(int argc,char **argv)
 		* junk eventually. See the seeding code in the main loop above. */
 		if ((cell->outputBuf[0] & 0xff) != 0xff) {
 			tmcell = getNeighbor(x,y,facing);
-			if ((tmcell->energy)&&accessAllowed(tmcell,reg,0)) {
+			if ((tmcell->energy)&&accessAllowed(tmcell,cell->reg,0)) {
 				/* Log it if we're replacing a viable cell */
 				if (tmcell->generation > 2) {
 					++statCounters.viableCellsReplaced;
