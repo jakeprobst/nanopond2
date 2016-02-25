@@ -54,5 +54,20 @@ Moved all cell-specific variables to cell struct
 
   Big performance hit
 
+commit f5921b64a16550a41d8ea6eeca18f2a51ea4547e
 
+Renaming
+
+	ptr_wordPtr	=> vm_idx;
+	ptr_shiftPtr	=> vm_offset;
+	reg		=> vm_reg
+	outputBuf	=> vm_buf
+	wordPtr		=> instruction_idx
+	shiftPtr	=> instruction_offset
+	tmcell		=> target_cell
+	POND_DEPTH	=> MAX_GENOME_SIZE
+
+103.15 real        99.48 user         4.18 sys
+
+Not sure I believe that time.
 

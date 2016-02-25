@@ -12,10 +12,10 @@
  * The Nanopond world is called a "pond."  It is an NxN two dimensional
  * array of Cell structures, and it wraps at the edges (it's toroidal).
  * Each Cell structure consists of a few attributes that are there for
- * statistics purposes, an energy level, and an array of POND_DEPTH
+ * statistics purposes, an energy level, and an array of MAX_GENOME_SIZE
  * four-bit values.  (The four-bit values are actually stored in an array
  * of machine-size words.)  The array in each cell contains the genome
- * associated with that cell, and POND_DEPTH is therefore the maximum
+ * associated with that cell, and MAX_GENOME_SIZE is therefore the maximum
  * allowable size for a cell genome.
  *
  * The first four bit value in the genome is called the "logo." What that is
@@ -224,7 +224,7 @@
 
 /* Depth of pond in four-bit codons -- this is the maximum
  * genome size. This *must* be a multiple of 16! */
-#define POND_DEPTH 512
+#define MAX_GENOME_SIZE 512
 
 /* This is the divisor that determines how much energy is taken
  * from cells when they try to KILL a viable cell neighbor and
@@ -392,10 +392,10 @@ static inline uint64_t getRandom()
 /* ----------------------------------------------------------------------- */
 
 /* Pond depth in machine-size words.  This is calculated from
- * POND_DEPTH and the size of the machine word. (The multiplication
+ * MAX_GENOME_SIZE and the size of the machine word. (The multiplication
  * by two is due to the fact that there are two four-bit values in
  * each eight-bit byte.) */
-#define POND_DEPTH_SYSWORDS (POND_DEPTH / (sizeof(uint64_t) * 2))
+#define MAX_GENOME_SIZE_SYSWORDS (MAX_GENOME_SIZE / (sizeof(uint64_t) * 2))
 
 /* Number of bits in a machine-size word */
 #define SYSWORD_BITS (sizeof(uint64_t) * 8)
@@ -428,24 +428,25 @@ struct Cell
 	uint64_t generation;			// Generations start at 0 and are 
 						//  incremented from there. 
 	uint64_t energy;			// Energy level of this cell 
-	uint64_t genome[POND_DEPTH_SYSWORDS];	// Memory space for cell genome 
+	uint64_t genome[MAX_GENOME_SIZE_SYSWORDS];	// Memory space for cell genome 
 						//  (genome is stored as four bit 
 						//  instructions packed into machine 
 						//  size words) 
-	uint64_t outputBuf[POND_DEPTH_SYSWORDS];// Buffer used for execution output of 
+	uint64_t outputBuf[MAX_GENOME_SIZE_SYSWORDS];// Buffer used for execution output of 
 						//  candidate offspring 
-	uint64_t reg;				// The main "register" 
-	uint64_t ptr_wordPtr;			// Virtual machine memory pointer register
-	uint64_t ptr_shiftPtr;			//  (which exists in two parts)
+	uint64_t vm_reg;				// The main "register" 
 
-	uint64_t currentWord,wordPtr,shiftPtr;	// Miscellaneous variables used in the loop 
+	uint64_t vm_idx;			// Virtual machine memory pointer register
+	uint64_t vm_offset;			//  (which exists in two parts)
+
+	uint64_t currentWord,instruction_idx,instruction_offset;	// Miscellaneous variables used in the loop 
 	uint64_t inst,tmp;			
 
 	uint64_t facing;			// Which way is the cell facing? 
-	struct Cell *tmcell;			// Pointer to target cell
+	struct Cell *target_cell;			// Pointer to target cell
 
-	uint64_t loopStack_wordPtr[POND_DEPTH];	// Virtual machine loop/rep stack 
-	uint64_t loopStack_shiftPtr[POND_DEPTH];
+	uint64_t loopStack_instruction_idx[MAX_GENOME_SIZE];	// Virtual machine loop/rep stack 
+	uint64_t loopStack_instruction_offset[MAX_GENOME_SIZE];
 	uint64_t loopStackPtr;
 	uint64_t falseLoopDepth;		// If this is nonzero, we're skipping to matching REP 
 						// It is incremented to track the depth of a nested set
@@ -580,9 +581,9 @@ static void doReport(const uint64_t clock)
 #ifdef DUMP_FREQUENCY
 static void doDump(const uint64_t clock)
 {
-	char buf[POND_DEPTH*2];
+	char buf[MAX_GENOME_SIZE*2];
 	FILE *d;
-	uint64_t x,y,wordPtr,shiftPtr,inst,stopCount,i;
+	uint64_t x,y,instruction_idx,instruction_offset,inst,stopCount,i;
 	struct Cell *cell;
   
 	sprintf(buf,"%" PRIu64 ".dump.csv",clock);
@@ -603,11 +604,11 @@ static void doDump(const uint64_t clock)
 					cell->parentID,
 					cell->lineage,
 					cell->generation);
-				wordPtr = 0;
-				shiftPtr = 0;
+				instruction_idx = 0;
+				instruction_offset = 0;
 				stopCount = 0;
-				for(i=0;i<POND_DEPTH;++i) {
-					inst = (cell->genome[wordPtr] >> shiftPtr) & 0xf;
+				for(i=0;i<MAX_GENOME_SIZE;++i) {
+					inst = (cell->genome[instruction_idx] >> instruction_offset) & 0xf;
 					/* Four STOP instructions in a row is considered the end.
 					* The probability of this being wrong is *very* small, and
 					* could only occur if you had four STOPs in a row inside
@@ -620,11 +621,11 @@ static void doDump(const uint64_t clock)
 							break;
 						}
 					} else stopCount = 0;
-					if ((shiftPtr += 4) >= SYSWORD_BITS) {
-						if (++wordPtr >= POND_DEPTH_SYSWORDS) {
-							wordPtr = 0;
-							shiftPtr = 4;
-						} else shiftPtr = 0;
+					if ((instruction_offset += 4) >= SYSWORD_BITS) {
+						if (++instruction_idx >= MAX_GENOME_SIZE_SYSWORDS) {
+							instruction_idx = 0;
+							instruction_offset = 4;
+						} else instruction_offset = 0;
 					}
 				}
 				fwrite("\n",1,1,d);
@@ -643,14 +644,14 @@ static void doDump(const uint64_t clock)
  */
 static void dumpCell(FILE *file, struct Cell *cell)
 {
-	uint64_t wordPtr,shiftPtr,inst,stopCount,i;
+	uint64_t instruction_idx,instruction_offset,inst,stopCount,i;
 
 	if (cell->energy&&(cell->generation > 2)) {
-		wordPtr = 0;
-		shiftPtr = 0;
+		instruction_idx = 0;
+		instruction_offset = 0;
 		stopCount = 0;
-		for(i=0;i<POND_DEPTH;++i) {
-				inst = (cell->genome[wordPtr] >> shiftPtr) & 0xf;
+		for(i=0;i<MAX_GENOME_SIZE;++i) {
+				inst = (cell->genome[instruction_idx] >> instruction_offset) & 0xf;
 				/* Four STOP instructions in a row is considered the end.
 				* The probability of this being wrong is *very* small, and
 				* could only occur if you had four STOPs in a row inside
@@ -665,12 +666,12 @@ static void dumpCell(FILE *file, struct Cell *cell)
 			} else {
 				stopCount = 0;
 			}
-			if ((shiftPtr += 4) >= SYSWORD_BITS) {
-				if (++wordPtr >= POND_DEPTH_SYSWORDS) {
-					wordPtr = EXEC_START_WORD;
-					shiftPtr = EXEC_START_BIT;
+			if ((instruction_offset += 4) >= SYSWORD_BITS) {
+				if (++instruction_idx >= MAX_GENOME_SIZE_SYSWORDS) {
+					instruction_idx = EXEC_START_WORD;
+					instruction_offset = EXEC_START_BIT;
 				} else {
-					shiftPtr = 0;
+					instruction_offset = 0;
 				}
 			}
 		}
@@ -745,7 +746,7 @@ static inline uint8_t getColor(struct Cell *c)
 				if (c->generation > 1) {
 					sum = 0;
 					skipnext = 0;
-					for(i=0;i<POND_DEPTH_SYSWORDS&&(c->genome[i] != ~((uint64_t)0));++i) {
+					for(i=0;i<MAX_GENOME_SIZE_SYSWORDS&&(c->genome[i] != ~((uint64_t)0));++i) {
 						word = c->genome[i];
 						for(j=0;j<SYSWORD_BITS/4;++j,word >>= 4) {
 							/* We ignore 0xf's here, because otherwise very similar genomes
@@ -839,7 +840,7 @@ int main(int argc,char **argv)
 			pond[x][y].lineage = 0;
 			pond[x][y].generation = 0;
 			pond[x][y].energy = 0;
-			for(i=0;i<POND_DEPTH_SYSWORDS;++i){
+			for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
 				pond[x][y].genome[i] = ~((uint64_t)0);
 			}
 		}
@@ -921,7 +922,7 @@ int main(int argc,char **argv)
 	#else
 			cell->energy += INFLOW_RATE_BASE;
 #endif /* INFLOW_RATE_VARIATION */
-			for(i=0;i<POND_DEPTH_SYSWORDS;++i){
+			for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
 				cell->genome[i] = getRandom();
 			}
 			++cellIdCounter;
@@ -945,15 +946,15 @@ int main(int argc,char **argv)
 
 		/* Reset the state of the VM prior to execution */
 		// BLR This should really be memset.
-		for(i=0;i<POND_DEPTH_SYSWORDS;++i){
+		for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
 			cell->outputBuf[i] = ~((uint64_t)0); /* ~0 == 0xfffff... */
 		}
-		cell->ptr_wordPtr = 0;
-		cell->ptr_shiftPtr = 0;
-		cell->reg = 0;
+		cell->vm_idx = 0;
+		cell->vm_offset = 0;
+		cell->vm_reg = 0;
 		cell->loopStackPtr = 0;
-		cell->wordPtr = EXEC_START_WORD;
-		cell->shiftPtr = EXEC_START_BIT;
+		cell->instruction_idx = EXEC_START_WORD;
+		cell->instruction_offset = EXEC_START_BIT;
 		cell->facing = 0;
 		cell->falseLoopDepth = 0;
 		cell->stop = 0;
@@ -972,7 +973,7 @@ int main(int argc,char **argv)
 		/* Core execution loop */
 		while (cell->energy&&(!(cell->stop))) {
 			/* Get the next instruction */
-			cell->inst = (cell->currentWord >> cell->shiftPtr) & 0xf;
+			cell->inst = (cell->currentWord >> cell->instruction_offset) & 0xf;
       
 			/* Randomly frob either the instruction or the register with a
 			* probability defined by MUTATION_RATE. This introduces variation,
@@ -985,7 +986,7 @@ int main(int argc,char **argv)
 				if (cell->tmp & 0x80){ /* Check for the 8th bit to get random boolean */
 					cell->inst = cell->tmp & 0xf; /* Only the first four bits are used here */
 				} else {
-					cell->reg = cell->tmp & 0xf;
+					cell->vm_reg = cell->tmp & 0xf;
 				}
 			}
       
@@ -1010,59 +1011,59 @@ int main(int argc,char **argv)
         
 				switch(cell->inst) {
 					case 0x0: /* ZERO: Zero VM state registers */
-						cell->reg = 0;
-						cell->ptr_wordPtr = 0;
-						cell->ptr_shiftPtr = 0;
+						cell->vm_reg = 0;
+						cell->vm_idx = 0;
+						cell->vm_offset = 0;
 						cell->facing = 0;
 						break;
 					case 0x1: /* FWD: Increment the pointer (wrap at end) */
-						if ((cell->ptr_shiftPtr += 4) >= SYSWORD_BITS) {
-							if (++(cell->ptr_wordPtr) >= POND_DEPTH_SYSWORDS){
-								cell->ptr_wordPtr = 0;
+						if ((cell->vm_offset += 4) >= SYSWORD_BITS) {
+							if (++(cell->vm_idx) >= MAX_GENOME_SIZE_SYSWORDS){
+								cell->vm_idx = 0;
 							}
-							cell->ptr_shiftPtr = 0;
+							cell->vm_offset = 0;
 						}
 						break;
 					case 0x2: /* BACK: Decrement the pointer (wrap at beginning) */
-						if (cell->ptr_shiftPtr){
-							cell->ptr_shiftPtr -= 4;
+						if (cell->vm_offset){
+							cell->vm_offset -= 4;
 						} else {
-							if (cell->ptr_wordPtr){
-								--(cell->ptr_wordPtr);
+							if (cell->vm_idx){
+								--(cell->vm_idx);
 							} else {
-								cell->ptr_wordPtr = POND_DEPTH_SYSWORDS - 1;
+								cell->vm_idx = MAX_GENOME_SIZE_SYSWORDS - 1;
 							}
-							cell->ptr_shiftPtr = SYSWORD_BITS - 4;
+							cell->vm_offset = SYSWORD_BITS - 4;
 						}
 						break;
 					case 0x3: /* INC: Increment the register */
-						cell->reg = (cell->reg + 1) & 0xf;
+						cell->vm_reg = (cell->vm_reg + 1) & 0xf;
 						break;
 					case 0x4: /* DEC: Decrement the register */
-						cell->reg = (cell->reg - 1) & 0xf;
+						cell->vm_reg = (cell->vm_reg - 1) & 0xf;
 						break;
 					case 0x5: /* READG: Read into the register from genome */
-						cell->reg = (cell->genome[cell->ptr_wordPtr] >> cell->ptr_shiftPtr) & 0xf;
+						cell->vm_reg = (cell->genome[cell->vm_idx] >> cell->vm_offset) & 0xf;
 						break;
 					case 0x6: /* WRITEG: Write out from the register to genome */
-						cell->genome[cell->ptr_wordPtr] &= ~(((uint64_t)0xf) << cell->ptr_shiftPtr);
-						cell->genome[cell->ptr_wordPtr] |= cell->reg << cell->ptr_shiftPtr;
-						cell->currentWord = cell->genome[cell->wordPtr]; /* Must refresh in case this changed! */
+						cell->genome[cell->vm_idx] &= ~(((uint64_t)0xf) << cell->vm_offset);
+						cell->genome[cell->vm_idx] |= cell->vm_reg << cell->vm_offset;
+						cell->currentWord = cell->genome[cell->instruction_idx]; /* Must refresh in case this changed! */
 						break;
 					case 0x7: /* READB: Read into the register from buffer */
-						cell->reg = (cell->outputBuf[cell->ptr_wordPtr] >> cell->ptr_shiftPtr) & 0xf;
+						cell->vm_reg = (cell->outputBuf[cell->vm_idx] >> cell->vm_offset) & 0xf;
 						break;
 					case 0x8: /* WRITEB: Write out from the register to buffer */
-						cell->outputBuf[cell->ptr_wordPtr] &= ~(((uint64_t)0xf) << cell->ptr_shiftPtr);
-						cell->outputBuf[cell->ptr_wordPtr] |= cell->reg << cell->ptr_shiftPtr;
+						cell->outputBuf[cell->vm_idx] &= ~(((uint64_t)0xf) << cell->vm_offset);
+						cell->outputBuf[cell->vm_idx] |= cell->vm_reg << cell->vm_offset;
 						break;
 					case 0x9: /* LOOP: Jump forward to matching REP if register is zero */
-						if (cell->reg) {
-							if (cell->loopStackPtr >= POND_DEPTH){
+						if (cell->vm_reg) {
+							if (cell->loopStackPtr >= MAX_GENOME_SIZE){
 								cell->stop = 1; /* Stack overflow ends execution */
 							} else {
-								cell->loopStack_wordPtr[cell->loopStackPtr] = cell->wordPtr;
-								cell->loopStack_shiftPtr[cell->loopStackPtr] = cell->shiftPtr;
+								cell->loopStack_instruction_idx[cell->loopStackPtr] = cell->instruction_idx;
+								cell->loopStack_instruction_offset[cell->loopStackPtr] = cell->instruction_offset;
 								++(cell->loopStackPtr);
 							}
 						} else {
@@ -1072,49 +1073,49 @@ int main(int argc,char **argv)
 					case 0xa: /* REP: Jump back to matching LOOP if register is nonzero */
 						if (cell->loopStackPtr) {
 							--(cell->loopStackPtr);
-							if (cell->reg) {
-								cell->wordPtr = cell->loopStack_wordPtr[cell->loopStackPtr];
-								cell->shiftPtr = cell->loopStack_shiftPtr[cell->loopStackPtr];
-								cell->currentWord = cell->genome[cell->wordPtr];
+							if (cell->vm_reg) {
+								cell->instruction_idx = cell->loopStack_instruction_idx[cell->loopStackPtr];
+								cell->instruction_offset = cell->loopStack_instruction_offset[cell->loopStackPtr];
+								cell->currentWord = cell->genome[cell->instruction_idx];
 								/* This ensures that the LOOP is rerun */
 								continue;
 							}
 						}
 						break;
 					case 0xb: /* TURN: Turn in the direction specified by register */
-						cell->facing = cell->reg & 3;
+						cell->facing = cell->vm_reg & 3;
 						break;
 					case 0xc: /* XCHG: Skip next instruction and exchange value of register with it */
-						if ((cell->shiftPtr += 4) >= SYSWORD_BITS) {
-							if (++(cell->wordPtr) >= POND_DEPTH_SYSWORDS) {
-								cell->wordPtr = EXEC_START_WORD;
-								cell->shiftPtr = EXEC_START_BIT;
+						if ((cell->instruction_offset += 4) >= SYSWORD_BITS) {
+							if (++(cell->instruction_idx) >= MAX_GENOME_SIZE_SYSWORDS) {
+								cell->instruction_idx = EXEC_START_WORD;
+								cell->instruction_offset = EXEC_START_BIT;
 							} else {
-								cell->shiftPtr = 0;
+								cell->instruction_offset = 0;
 							}
 						}
-						cell->tmp = cell->reg;
-						cell->reg = (cell->genome[cell->wordPtr] >> cell->shiftPtr) & 0xf;
-						cell->genome[cell->wordPtr] &= ~(((uint64_t)0xf) << cell->shiftPtr);
-						cell->genome[cell->wordPtr] |= cell->tmp << cell->shiftPtr;
-						cell->currentWord = cell->genome[cell->wordPtr];
+						cell->tmp = cell->vm_reg;
+						cell->vm_reg = (cell->genome[cell->instruction_idx] >> cell->instruction_offset) & 0xf;
+						cell->genome[cell->instruction_idx] &= ~(((uint64_t)0xf) << cell->instruction_offset);
+						cell->genome[cell->instruction_idx] |= cell->tmp << cell->instruction_offset;
+						cell->currentWord = cell->genome[cell->instruction_idx];
 						break;
 					case 0xd: /* KILL: Blow away neighboring cell if allowed with penalty on failure */
-						cell->tmcell = getNeighbor(x,y,cell->facing);
-						if (accessAllowed(cell->tmcell,cell->reg,0)) {
-							if (cell->tmcell->generation > 2){
+						cell->target_cell = getNeighbor(x,y,cell->facing);
+						if (accessAllowed(cell->target_cell,cell->vm_reg,0)) {
+							if (cell->target_cell->generation > 2){
 								++statCounters.viableCellsKilled;
 							}
 
 							/* Filling first two words with 0xfffff... is enough */
-							cell->tmcell->genome[0] = ~((uint64_t)0);
-							cell->tmcell->genome[1] = ~((uint64_t)0);
-							cell->tmcell->ID = cellIdCounter;
-							cell->tmcell->parentID = 0;
-							cell->tmcell->lineage = cellIdCounter;
-							cell->tmcell->generation = 0;
+							cell->target_cell->genome[0] = ~((uint64_t)0);
+							cell->target_cell->genome[1] = ~((uint64_t)0);
+							cell->target_cell->ID = cellIdCounter;
+							cell->target_cell->parentID = 0;
+							cell->target_cell->lineage = cellIdCounter;
+							cell->target_cell->generation = 0;
 							++cellIdCounter;		// Why is this here?  //BLR
-						} else if (cell->tmcell->generation > 2) {
+						} else if (cell->target_cell->generation > 2) {
 							cell->tmp = cell->energy / FAILED_KILL_PENALTY;
 							if (cell->energy > cell->tmp){
 								cell->energy -= cell->tmp;
@@ -1124,15 +1125,15 @@ int main(int argc,char **argv)
             					}
 						break;
 					case 0xe: /* SHARE: Equalize energy between self and neighbor if allowed */
-						cell->tmcell = getNeighbor(x,y,cell->facing);
-						if (accessAllowed(cell->tmcell,cell->reg,1)) {
-							if (cell->tmcell->generation > 2) {
+						cell->target_cell = getNeighbor(x,y,cell->facing);
+						if (accessAllowed(cell->target_cell,cell->vm_reg,1)) {
+							if (cell->target_cell->generation > 2) {
 								++statCounters.viableCellShares;
 							}
 
-							cell->tmp = cell->energy + cell->tmcell->energy;
-							cell->tmcell->energy = cell->tmp / 2;
-							cell->energy = cell->tmp - cell->tmcell->energy;
+							cell->tmp = cell->energy + cell->target_cell->energy;
+							cell->target_cell->energy = cell->tmp / 2;
+							cell->energy = cell->tmp - cell->target_cell->energy;
 						}
 						break;
 					case 0xf: /* STOP: End execution */
@@ -1143,14 +1144,14 @@ int main(int argc,char **argv)
       
 			/* Advance the shift and word pointers, and loop around
 			* to the beginning at the end of the genome. */
-			if ((cell->shiftPtr += 4) >= SYSWORD_BITS) {
-				if (++(cell->wordPtr) >= POND_DEPTH_SYSWORDS) {
-					cell->wordPtr = EXEC_START_WORD;
-					cell->shiftPtr = EXEC_START_BIT;
+			if ((cell->instruction_offset += 4) >= SYSWORD_BITS) {
+				if (++(cell->instruction_idx) >= MAX_GENOME_SIZE_SYSWORDS) {
+					cell->instruction_idx = EXEC_START_WORD;
+					cell->instruction_offset = EXEC_START_BIT;
 				} else { 
-					cell->shiftPtr = 0; 
+					cell->instruction_offset = 0; 
 				}
-				cell->currentWord = cell->genome[cell->wordPtr];
+				cell->currentWord = cell->genome[cell->instruction_idx];
 			}
 		}
     
@@ -1160,19 +1161,19 @@ int main(int argc,char **argv)
 		* would never be executed and then would be replaced with random
 		* junk eventually. See the seeding code in the main loop above. */
 		if ((cell->outputBuf[0] & 0xff) != 0xff) {
-			cell->tmcell = getNeighbor(x,y,cell->facing);
-			if ((cell->tmcell->energy)&&accessAllowed(cell->tmcell,cell->reg,0)) {
+			cell->target_cell = getNeighbor(x,y,cell->facing);
+			if ((cell->target_cell->energy)&&accessAllowed(cell->target_cell,cell->vm_reg,0)) {
 				/* Log it if we're replacing a viable cell */
-				if (cell->tmcell->generation > 2) {
+				if (cell->target_cell->generation > 2) {
 					++statCounters.viableCellsReplaced;
 				}
         
-				cell->tmcell->ID = ++cellIdCounter;
-				cell->tmcell->parentID = cell->ID;
-				cell->tmcell->lineage = cell->lineage; /* Lineage is copied in offspring */
-				cell->tmcell->generation = cell->generation + 1;
-				for(i=0;i<POND_DEPTH_SYSWORDS;++i){
-					cell->tmcell->genome[i] = cell->outputBuf[i];
+				cell->target_cell->ID = ++cellIdCounter;
+				cell->target_cell->parentID = cell->ID;
+				cell->target_cell->lineage = cell->lineage; /* Lineage is copied in offspring */
+				cell->target_cell->generation = cell->generation + 1;
+				for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
+					cell->target_cell->genome[i] = cell->outputBuf[i];
 				}
 			}
 		}
