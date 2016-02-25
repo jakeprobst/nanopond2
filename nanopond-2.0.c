@@ -395,10 +395,10 @@ static inline uint64_t getRandom()
  * MAX_GENOME_SIZE and the size of the machine word. (The multiplication
  * by two is due to the fact that there are two four-bit values in
  * each eight-bit byte.) */
-#define MAX_GENOME_SIZE_SYSWORDS (MAX_GENOME_SIZE / (sizeof(uint64_t) * 2))
+//#define MAX_GENOME_SIZE_SYSWORDS (MAX_GENOME_SIZE / (sizeof(uint64_t) * 2))
 
 /* Number of bits in a machine-size word */
-#define SYSWORD_BITS (sizeof(uint64_t) * 8)
+//#define SYSWORD_BITS (sizeof(uint64_t) * 8)
 
 /* Constants representing neighbors in the 2D grid. */
 #define N_LEFT 0
@@ -428,25 +428,27 @@ struct Cell
 	uint64_t generation;			// Generations start at 0 and are 
 						//  incremented from there. 
 	uint64_t energy;			// Energy level of this cell 
-	uint64_t genome[MAX_GENOME_SIZE_SYSWORDS];	// Memory space for cell genome 
+	uint8_t genome[MAX_GENOME_SIZE];	// Memory space for cell genome 
 						//  (genome is stored as four bit 
 						//  instructions packed into machine 
 						//  size words) 
-	uint64_t outputBuf[MAX_GENOME_SIZE_SYSWORDS];// Buffer used for execution output of 
+	uint8_t vm_buf[MAX_GENOME_SIZE];	// Buffer used for execution output of 
 						//  candidate offspring 
-	uint64_t vm_reg;				// The main "register" 
+	uint64_t vm_reg;			// The main "register" 
 
 	uint64_t vm_idx;			// Virtual machine memory pointer register
 	uint64_t vm_offset;			//  (which exists in two parts)
 
-	uint64_t currentWord,instruction_idx,instruction_offset;	// Miscellaneous variables used in the loop 
+	//uint64_t currentWord;
+	uint64_t instruction_idx;		// Miscellaneous variables used in the loop 
+	//uint64_t instruction_offset;	
 	uint64_t inst,tmp;			
 
 	uint64_t facing;			// Which way is the cell facing? 
 	struct Cell *target_cell;			// Pointer to target cell
 
 	uint64_t loopStack_instruction_idx[MAX_GENOME_SIZE];	// Virtual machine loop/rep stack 
-	uint64_t loopStack_instruction_offset[MAX_GENOME_SIZE];
+	//uint64_t loopStack_instruction_offset[MAX_GENOME_SIZE];
 	uint64_t loopStackPtr;
 	uint64_t falseLoopDepth;		// If this is nonzero, we're skipping to matching REP 
 						// It is incremented to track the depth of a nested set
@@ -583,7 +585,7 @@ static void doDump(const uint64_t clock)
 {
 	char buf[MAX_GENOME_SIZE*2];
 	FILE *d;
-	uint64_t x,y,instruction_idx,instruction_offset,inst,stopCount,i;
+	uint64_t x,y,inst,stopCount,i;
 	struct Cell *cell;
   
 	sprintf(buf,"%" PRIu64 ".dump.csv",clock);
@@ -604,11 +606,9 @@ static void doDump(const uint64_t clock)
 					cell->parentID,
 					cell->lineage,
 					cell->generation);
-				instruction_idx = 0;
-				instruction_offset = 0;
 				stopCount = 0;
 				for(i=0;i<MAX_GENOME_SIZE;++i) {
-					inst = (cell->genome[instruction_idx] >> instruction_offset) & 0xf;
+					inst = cell->genome[i];
 					/* Four STOP instructions in a row is considered the end.
 					* The probability of this being wrong is *very* small, and
 					* could only occur if you had four STOPs in a row inside
@@ -621,12 +621,6 @@ static void doDump(const uint64_t clock)
 							break;
 						}
 					} else stopCount = 0;
-					if ((instruction_offset += 4) >= SYSWORD_BITS) {
-						if (++instruction_idx >= MAX_GENOME_SIZE_SYSWORDS) {
-							instruction_idx = 0;
-							instruction_offset = 4;
-						} else instruction_offset = 0;
-					}
 				}
 				fwrite("\n",1,1,d);
 			}
@@ -644,35 +638,25 @@ static void doDump(const uint64_t clock)
  */
 static void dumpCell(FILE *file, struct Cell *cell)
 {
-	uint64_t instruction_idx,instruction_offset,inst,stopCount,i;
+	uint64_t inst,stopCount,i;
 
 	if (cell->energy&&(cell->generation > 2)) {
-		instruction_idx = 0;
-		instruction_offset = 0;
 		stopCount = 0;
 		for(i=0;i<MAX_GENOME_SIZE;++i) {
-				inst = (cell->genome[instruction_idx] >> instruction_offset) & 0xf;
+				inst = cell->genome[i];
 				/* Four STOP instructions in a row is considered the end.
 				* The probability of this being wrong is *very* small, and
 				* could only occur if you had four STOPs in a row inside
 				* a LOOP/REP pair that's always false. In any case, this
 				* would always result in our *underestimating* the size of
 				* the genome and would never result in an overestimation. */
-			fprintf(file,"%" PRIu64,inst);
+			fprintf(file,"%" PRIx64,inst);
 			if (inst == 0xf) { /* STOP */
 				if (++stopCount >= 4){
 					break;
 				}
 			} else {
 				stopCount = 0;
-			}
-			if ((instruction_offset += 4) >= SYSWORD_BITS) {
-				if (++instruction_idx >= MAX_GENOME_SIZE_SYSWORDS) {
-					instruction_idx = EXEC_START_WORD;
-					instruction_offset = EXEC_START_BIT;
-				} else {
-					instruction_offset = 0;
-				}
 			}
 		}
 	}
@@ -728,7 +712,7 @@ static inline int accessAllowed(struct Cell *const c2,const uint64_t c1guess,int
 #ifdef USE_SDL
 static inline uint8_t getColor(struct Cell *c)
 {
-	uint64_t i,j,word,sum,opcode,skipnext;
+	uint64_t i,word,sum,opcode,skipnext;
 
 	if (c->energy) {
 		switch(colorScheme) {
@@ -746,23 +730,21 @@ static inline uint8_t getColor(struct Cell *c)
 				if (c->generation > 1) {
 					sum = 0;
 					skipnext = 0;
-					for(i=0;i<MAX_GENOME_SIZE_SYSWORDS&&(c->genome[i] != ~((uint64_t)0));++i) {
+					for(i=0; i<MAX_GENOME_SIZE; ++i) {	// No longer detect stops.  --BLR
 						word = c->genome[i];
-						for(j=0;j<SYSWORD_BITS/4;++j,word >>= 4) {
-							/* We ignore 0xf's here, because otherwise very similar genomes
-							* might get quite different hash values in the case when one of
-							* the genomes is slightly longer and uses one more maschine
-							* word. */
-							opcode = word & 0xf;
-							if (skipnext){
-								skipnext = 0;
-							} else {
-								if (opcode != 0xf){
-									sum += opcode;
-								}
-								if (opcode == 0xc){ /* 0xc == XCHG */
-									skipnext = 1; /* Skip "operand" after XCHG */
-								}
+						/* We ignore 0xf's here, because otherwise very similar genomes
+						* might get quite different hash values in the case when one of
+						* the genomes is slightly longer and uses one more maschine
+						* word. */
+						opcode = word & 0xf;
+						if (skipnext){
+							skipnext = 0;
+						} else {
+							if (opcode != 0xf){
+								sum += opcode;
+							}
+							if (opcode == 0xc){ /* 0xc == XCHG */
+								skipnext = 1; /* Skip "operand" after XCHG */
 							}
 						}
 					}
@@ -840,8 +822,8 @@ int main(int argc,char **argv)
 			pond[x][y].lineage = 0;
 			pond[x][y].generation = 0;
 			pond[x][y].energy = 0;
-			for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
-				pond[x][y].genome[i] = ~((uint64_t)0);
+			for(i=0;i<MAX_GENOME_SIZE;++i){	// should be memset --BLR
+				pond[x][y].genome[i] = 0xff; 
 			}
 		}
 	}
@@ -922,7 +904,7 @@ int main(int argc,char **argv)
 	#else
 			cell->energy += INFLOW_RATE_BASE;
 #endif /* INFLOW_RATE_VARIATION */
-			for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
+			for(i=0;i<MAX_GENOME_SIZE;++i){	// Should be memcpy.  --blr
 				cell->genome[i] = getRandom();
 			}
 			++cellIdCounter;
@@ -946,15 +928,14 @@ int main(int argc,char **argv)
 
 		/* Reset the state of the VM prior to execution */
 		// BLR This should really be memset.
-		for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
-			cell->outputBuf[i] = ~((uint64_t)0); /* ~0 == 0xfffff... */
+		for(i=0;i<MAX_GENOME_SIZE;++i){
+			cell->vm_buf[i] = 0xff; 
 		}
 		cell->vm_idx = 0;
 		cell->vm_offset = 0;
 		cell->vm_reg = 0;
 		cell->loopStackPtr = 0;
 		cell->instruction_idx = EXEC_START_WORD;
-		cell->instruction_offset = EXEC_START_BIT;
 		cell->facing = 0;
 		cell->falseLoopDepth = 0;
 		cell->stop = 0;
@@ -965,7 +946,6 @@ int main(int argc,char **argv)
 		 * inner loop. We have to be careful to refresh this
 		 * whenever it might have changed... take a look at
 		 * the code. :) */
-		cell->currentWord = cell->genome[0];
     
 		/* Keep track of how many cells have been executed */
 		statCounters.cellExecutions += 1.0;
@@ -973,7 +953,7 @@ int main(int argc,char **argv)
 		/* Core execution loop */
 		while (cell->energy&&(!(cell->stop))) {
 			/* Get the next instruction */
-			cell->inst = (cell->currentWord >> cell->instruction_offset) & 0xf;
+			cell->inst = cell->genome[cell->instruction_idx];
       
 			/* Randomly frob either the instruction or the register with a
 			* probability defined by MUTATION_RATE. This introduces variation,
@@ -1016,46 +996,29 @@ int main(int argc,char **argv)
 						cell->vm_offset = 0;
 						cell->facing = 0;
 						break;
-					case 0x1: /* FWD: Increment the pointer (wrap at end) */
-						if ((cell->vm_offset += 4) >= SYSWORD_BITS) {
-							if (++(cell->vm_idx) >= MAX_GENOME_SIZE_SYSWORDS){
-								cell->vm_idx = 0;
-							}
-							cell->vm_offset = 0;
-						}
+					case 0x1: // INC_VM_IDX Increment virtual machine "pointer".
+						cell->vm_idx = (cell->vm_idx+1)%MAX_GENOME_SIZE;
 						break;
-					case 0x2: /* BACK: Decrement the pointer (wrap at beginning) */
-						if (cell->vm_offset){
-							cell->vm_offset -= 4;
-						} else {
-							if (cell->vm_idx){
-								--(cell->vm_idx);
-							} else {
-								cell->vm_idx = MAX_GENOME_SIZE_SYSWORDS - 1;
-							}
-							cell->vm_offset = SYSWORD_BITS - 4;
-						}
+					case 0x2: // DEC_VM_IDX Decrement virtual machine "pointer".
+						cell->vm_idx = (cell->vm_idx-1)%MAX_GENOME_SIZE;
 						break;
-					case 0x3: /* INC: Increment the register */
+					case 0x3: // INC_REG: Increment the register 
 						cell->vm_reg = (cell->vm_reg + 1) & 0xf;
 						break;
-					case 0x4: /* DEC: Decrement the register */
+					case 0x4: // DEC_REG: Decrement the register 
 						cell->vm_reg = (cell->vm_reg - 1) & 0xf;
 						break;
-					case 0x5: /* READG: Read into the register from genome */
-						cell->vm_reg = (cell->genome[cell->vm_idx] >> cell->vm_offset) & 0xf;
+					case 0x5: // CP_GENOME_TO_REG: 
+						cell->vm_reg = cell->genome[cell->vm_idx];
 						break;
-					case 0x6: /* WRITEG: Write out from the register to genome */
-						cell->genome[cell->vm_idx] &= ~(((uint64_t)0xf) << cell->vm_offset);
-						cell->genome[cell->vm_idx] |= cell->vm_reg << cell->vm_offset;
-						cell->currentWord = cell->genome[cell->instruction_idx]; /* Must refresh in case this changed! */
+					case 0x6: // CP_REG_TO_GENOME:
+						cell->genome[cell->vm_idx] = cell->vm_reg;
 						break;
-					case 0x7: /* READB: Read into the register from buffer */
-						cell->vm_reg = (cell->outputBuf[cell->vm_idx] >> cell->vm_offset) & 0xf;
+					case 0x7: // CP_BUF_TO_REG:
+						cell->vm_reg = cell->vm_buf[cell->vm_idx];
 						break;
-					case 0x8: /* WRITEB: Write out from the register to buffer */
-						cell->outputBuf[cell->vm_idx] &= ~(((uint64_t)0xf) << cell->vm_offset);
-						cell->outputBuf[cell->vm_idx] |= cell->vm_reg << cell->vm_offset;
+					case 0x8: // CP_REG_TO_BUF:
+						cell->vm_buf[cell->vm_idx] = cell->vm_reg;
 						break;
 					case 0x9: /* LOOP: Jump forward to matching REP if register is zero */
 						if (cell->vm_reg) {
@@ -1063,7 +1026,6 @@ int main(int argc,char **argv)
 								cell->stop = 1; /* Stack overflow ends execution */
 							} else {
 								cell->loopStack_instruction_idx[cell->loopStackPtr] = cell->instruction_idx;
-								cell->loopStack_instruction_offset[cell->loopStackPtr] = cell->instruction_offset;
 								++(cell->loopStackPtr);
 							}
 						} else {
@@ -1075,9 +1037,6 @@ int main(int argc,char **argv)
 							--(cell->loopStackPtr);
 							if (cell->vm_reg) {
 								cell->instruction_idx = cell->loopStack_instruction_idx[cell->loopStackPtr];
-								cell->instruction_offset = cell->loopStack_instruction_offset[cell->loopStackPtr];
-								cell->currentWord = cell->genome[cell->instruction_idx];
-								/* This ensures that the LOOP is rerun */
 								continue;
 							}
 						}
@@ -1086,19 +1045,13 @@ int main(int argc,char **argv)
 						cell->facing = cell->vm_reg & 3;
 						break;
 					case 0xc: /* XCHG: Skip next instruction and exchange value of register with it */
-						if ((cell->instruction_offset += 4) >= SYSWORD_BITS) {
-							if (++(cell->instruction_idx) >= MAX_GENOME_SIZE_SYSWORDS) {
-								cell->instruction_idx = EXEC_START_WORD;
-								cell->instruction_offset = EXEC_START_BIT;
-							} else {
-								cell->instruction_offset = 0;
-							}
+						cell->instruction_idx = (cell->instruction_idx + 1)%MAX_GENOME_SIZE;
+						if(cell->instruction_idx == 0){
+							cell->instruction_idx = 1; //First instruction is the "logo".
 						}
 						cell->tmp = cell->vm_reg;
-						cell->vm_reg = (cell->genome[cell->instruction_idx] >> cell->instruction_offset) & 0xf;
-						cell->genome[cell->instruction_idx] &= ~(((uint64_t)0xf) << cell->instruction_offset);
-						cell->genome[cell->instruction_idx] |= cell->tmp << cell->instruction_offset;
-						cell->currentWord = cell->genome[cell->instruction_idx];
+						cell->vm_reg = cell->genome[cell->instruction_idx];
+						cell->genome[cell->instruction_idx] = cell->tmp;
 						break;
 					case 0xd: /* KILL: Blow away neighboring cell if allowed with penalty on failure */
 						cell->target_cell = getNeighbor(x,y,cell->facing);
@@ -1107,9 +1060,12 @@ int main(int argc,char **argv)
 								++statCounters.viableCellsKilled;
 							}
 
-							/* Filling first two words with 0xfffff... is enough */
-							cell->target_cell->genome[0] = ~((uint64_t)0);
-							cell->target_cell->genome[1] = ~((uint64_t)0);
+							/* Filling first few words with 0xff is enough */
+							cell->target_cell->genome[0] = ~((uint8_t)0);
+							cell->target_cell->genome[1] = ~((uint8_t)0);
+							cell->target_cell->genome[2] = ~((uint8_t)0);
+							cell->target_cell->genome[3] = ~((uint8_t)0);
+							cell->target_cell->genome[4] = ~((uint8_t)0);
 							cell->target_cell->ID = cellIdCounter;
 							cell->target_cell->parentID = 0;
 							cell->target_cell->lineage = cellIdCounter;
@@ -1144,23 +1100,18 @@ int main(int argc,char **argv)
       
 			/* Advance the shift and word pointers, and loop around
 			* to the beginning at the end of the genome. */
-			if ((cell->instruction_offset += 4) >= SYSWORD_BITS) {
-				if (++(cell->instruction_idx) >= MAX_GENOME_SIZE_SYSWORDS) {
-					cell->instruction_idx = EXEC_START_WORD;
-					cell->instruction_offset = EXEC_START_BIT;
-				} else { 
-					cell->instruction_offset = 0; 
-				}
-				cell->currentWord = cell->genome[cell->instruction_idx];
+			cell->instruction_idx = (cell->instruction_idx + 1) % MAX_GENOME_SIZE;
+			if(cell->instruction_idx == 0){
+				cell->instruction_idx = 1;	// skip the "logo".
 			}
 		}
     
-		/* Copy outputBuf into neighbor if access is permitted and there
+		/* Copy vm_buf into neighbor if access is permitted and there
 		* is energy there to make something happen. There is no need
 		* to copy to a cell with no energy, since anything copied there
 		* would never be executed and then would be replaced with random
 		* junk eventually. See the seeding code in the main loop above. */
-		if ((cell->outputBuf[0] & 0xff) != 0xff) {
+		if (cell->vm_buf[0]  != 0xff) {	
 			cell->target_cell = getNeighbor(x,y,cell->facing);
 			if ((cell->target_cell->energy)&&accessAllowed(cell->target_cell,cell->vm_reg,0)) {
 				/* Log it if we're replacing a viable cell */
@@ -1172,8 +1123,8 @@ int main(int argc,char **argv)
 				cell->target_cell->parentID = cell->ID;
 				cell->target_cell->lineage = cell->lineage; /* Lineage is copied in offspring */
 				cell->target_cell->generation = cell->generation + 1;
-				for(i=0;i<MAX_GENOME_SIZE_SYSWORDS;++i){
-					cell->target_cell->genome[i] = cell->outputBuf[i];
+				for(i=0;i<MAX_GENOME_SIZE;++i){ // Should be memcpy --BLR
+					cell->target_cell->genome[i] = cell->vm_buf[i];
 				}
 			}
 		}

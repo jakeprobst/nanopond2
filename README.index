@@ -71,3 +71,9 @@ Renaming
 
 Not sure I believe that time.
 
+commit 897bcfef520e355c0d99bcc858150f37dde1cb3d
+
+Reindexing
+
+  genome and vm_buf are now byte-arrays of size MAX_GENOME_SIZE
+
